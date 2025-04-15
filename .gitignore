@@ -1,0 +1,38 @@
+# Build directories and files
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Object files and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+
+# Test outputs
+tests/build/
+test_*.txt
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-*
+*.swp
+*.swo
+
+# Miscellaneous
+*.bak
+*.tmp
+*.cache
+.DS_Store
