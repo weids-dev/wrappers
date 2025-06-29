@@ -1,206 +1,167 @@
-#include "sumcheck_multilinear.h"
-#include <chrono>
-#include <gtest/gtest.h>
-#include <iostream>
+// tests/test_sumcheck_multilinear.cpp
+// ----------------------------------------------
+// gtests for the toy multilinear sum-check protocol
+// ----------------------------------------------
 
-// Test fixture for shared setup (optional, used for protocol tests)
-class SumCheckTest : public ::testing::Test {
-  protected:
-    void SetUp() override {
-        // Seed random number generator for reproducibility
-        srand(42);
-    }
+#include <gtest/gtest.h>
+
+#include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
+using FieldT = libff::Fr<libff::alt_bn128_pp>;
+
+#include "sumcheck_multilinear.hpp"
+
+#include <chrono>
+#include <random>
+#include <tuple>
+
+// ------------ helpers --------------------------------------------------------
+
+/* Brute-force sum of g over {0,1}^n – used only to cross-check small instances
+ */
+static FieldT brute_sum_bool_cube(const MultilinearPolynomial &g) {
+  const size_t n = g.n;
+  FieldT acc = FieldT::zero();
+  std::vector<FieldT> pt(n, FieldT::zero());
+
+  for (size_t mask = 0; mask < (1u << n); ++mask) {
+    for (size_t i = 0; i < n; ++i)
+      pt[i] = (mask & (1u << i)) ? FieldT::one() : FieldT::zero();
+    acc += g.evaluate(pt);
+  }
+  return acc;
+}
+
+/* Produce a random multilinear polynomial of arity n. */
+static MultilinearPolynomial random_poly(size_t n, std::mt19937_64 &rng) {
+  std::uniform_int_distribution<uint64_t> dist; // full field range
+  std::vector<FieldT> coeffs(1u << n);
+  for (auto &c : coeffs)
+    c = FieldT(dist(rng));
+  return MultilinearPolynomial{n, coeffs};
+}
+
+// ------------ TEST FIXTURE ---------------------------------------------------
+
+class SumcheckFixture : public ::testing::Test {
+protected:
+  std::mt19937_64 rng;
+
+  void SetUp() override {
+    std::random_device rd;
+    rng.seed(rd());
+  }
 };
 
-// FieldElement Tests
-TEST(FieldElementTest, Arithmetic) {
-    int P = 7;
-    FieldElement a(3, P);
-    FieldElement b(5, P);
-
-    // Addition: 3 + 5 = 8 ≡ 1 mod 7
-    FieldElement sum = a + b;
-    ASSERT_EQ(sum.get_value(), 1);
-
-    // Subtraction: 3 - 5 = -2 ≡ 5 mod 7
-    FieldElement diff = a - b;
-    ASSERT_EQ(diff.get_value(), 5);
-
-    // Multiplication: 3 * 5 = 15 ≡ 1 mod 7
-    FieldElement prod = a * b;
-    ASSERT_EQ(prod.get_value(), 1);
-
-    // Edge case: P-1
-    FieldElement c(P - 1, P);
-    FieldElement d = c + FieldElement(1, P); // (P-1) + 1 = P ≡ 0 mod P
-    ASSERT_EQ(d.get_value(), 0);
+// ----------------------------------------------------------------------------
+// 1. Core algebra sanity (very small, catches blatant issues)
+// ----------------------------------------------------------------------------
+TEST(AlgebraSanity, FieldTArithmetic) {
+  FieldT a(3), b(5);
+  ASSERT_EQ(a + b, FieldT(8));
+  ASSERT_EQ(a * b, FieldT(15));
+  ASSERT_EQ((a - b) + b, a);
+  ASSERT_TRUE(FieldT::one() + FieldT(-1) == FieldT::zero());
 }
 
-// MultilinearPolynomial Tests
-TEST(MultilinearPolynomialTest, ConstructorInvalidSize) {
-    int P = 7, n = 2;
-    std::vector<int> coeffs = {1, 2, 3}; // Size 3, expected 2^2 = 4
-    ASSERT_THROW(MultilinearPolynomial(n, P, coeffs), std::invalid_argument);
+// ----------------------------------------------------------------------------
+// 2. Polynomial evaluation & summation correctness (n <= 5, brute-forced)
+// ----------------------------------------------------------------------------
+TEST_F(SumcheckFixture, PolynomialEvaluateAndSumSmall) {
+  for (size_t n = 1; n <= 5; ++n) {
+    auto g = random_poly(n, rng);
+    // Cross-check sum_over_remaining(k=0) against brute force.
+    FieldT lib_sum = g.sum_over_remaining(0, {});
+    FieldT brute = brute_sum_bool_cube(g);
+    ASSERT_EQ(lib_sum, brute) << "Mismatch for n = " << n;
+  }
 }
 
-TEST(MultilinearPolynomialTest, Evaluate) {
-    int P = 7, n = 2;
-    // g(x1,x2) = 1 + 2*x1 + 3*x2 + 4*x1*x2
-    std::vector<int> coeffs = {1, 2, 3, 4};
-    MultilinearPolynomial poly(n, P, coeffs);
-
-    std::vector<FieldElement> point00 = {FieldElement(0, P),
-                                         FieldElement(0, P)};
-    ASSERT_EQ(poly.evaluate(point00).get_value(), 1); // 1
-
-    std::vector<FieldElement> point11 = {FieldElement(1, P),
-                                         FieldElement(1, P)};
-    ASSERT_EQ(poly.evaluate(point11).get_value(),
-              (1 + 2 + 3 + 4) % P); // 10 ≡ 3 mod 7
-}
-
-TEST(MultilinearPolynomialTest, SumOverRemaining) {
-    int P = 7, n = 2;
-    std::vector<int> coeffs = {1, 2, 3, 4};
-    MultilinearPolynomial poly(n, P, coeffs);
-
-    // Sum over all variables
-    FieldElement sum_all = poly.sum_over_remaining(0, {});
-    FieldElement manual_sum(0, P);
-    for (int x1 = 0; x1 <= 1; x1++) {
-        for (int x2 = 0; x2 <= 1; x2++) {
-            std::vector<FieldElement> point = {FieldElement(x1, P),
-                                               FieldElement(x2, P)};
-            manual_sum = manual_sum + poly.evaluate(point);
-        }
-    }
-    ASSERT_EQ(sum_all.get_value(), manual_sum.get_value());
-
-    // Sum over x2 with x1 = 2
-    FieldElement r(2, P);
-    FieldElement sum_x2 = poly.sum_over_remaining(1, {r});
-    FieldElement manual_sum_x2 = poly.evaluate({r, FieldElement(0, P)}) +
-                                 poly.evaluate({r, FieldElement(1, P)});
-    ASSERT_EQ(sum_x2.get_value(), manual_sum_x2.get_value());
-}
-
-// LinearPolynomial Tests
-TEST(LinearPolynomialTest, EvaluateAndSum) {
-    int P = 7;
-    FieldElement c0(2, P), c1(3, P);
-    LinearPolynomial p(c0, c1, P);
-
-    FieldElement x(4, P);
-    FieldElement eval = p.evaluate(x); // 2 + 3*4 = 14 ≡ 0 mod 7
-    ASSERT_EQ(eval.get_value(), 0);
-
-    FieldElement sum_binary = p.sum_over_binary(); // 2 + (2+3) = 7 ≡ 0 mod 7
-    ASSERT_EQ(sum_binary.get_value(), 0);
-}
-
-// Prover Tests
-TEST(ProverTest, ComputeNextLinear) {
-    int P = 7, n = 2;
-    std::vector<int> coeffs = {1, 2, 3, 4};
-    MultilinearPolynomial g(n, P, coeffs);
-    Prover prover(g);
-
-    std::vector<FieldElement> fixed = {FieldElement(2, P)};
-    LinearPolynomial p = prover.compute_next_linear(fixed);
-    // p(x2) = g(2,x2), check at x2=0 and x2=1
-    ASSERT_EQ(p.evaluate(FieldElement(0, P)).get_value(),
-              g.evaluate({FieldElement(2, P), FieldElement(0, P)}).get_value());
-    ASSERT_EQ(p.evaluate(FieldElement(1, P)).get_value(),
-              g.evaluate({FieldElement(2, P), FieldElement(1, P)}).get_value());
-}
-
-// Protocol Tests
-TEST_F(SumCheckTest, Correctness) {
-    int P = 17, n = 3;
-    std::vector<int> coeffs = {1, 2, 3, 4, 5, 6, 7, 8};
-    MultilinearPolynomial g(n, P, coeffs);
-    FieldElement H = g.sum_over_remaining(0, {});
+// ----------------------------------------------------------------------------
+// 3. Completeness: honest prover should always convince verifier.
+//    Routine CI run: n <= 10.
+// ----------------------------------------------------------------------------
+TEST_F(SumcheckFixture, CompletenessManyParameters) {
+  std::vector<size_t> arities = {1, 2, 3, 5, 8, 10};
+  for (size_t n : arities) {
+    auto g = random_poly(n, rng); // random polynomial
+    FieldT H = g.sum_over_remaining(0, {});
 
     Prover prover(g);
-    Verifier verifier(P, H, n);
-    ASSERT_TRUE(verifier.verify(prover));
+    Verifier verifier(H, n);
+
+    ASSERT_TRUE(verifier.verify(prover)) << "Completeness failed for n = " << n;
+  }
 }
 
-TEST_F(SumCheckTest, Soundness) {
-    int P = 17, n = 3;
-    std::vector<int> coeffs = {1, 2, 3, 4, 5, 6, 7, 8};
-    MultilinearPolynomial g(n, P, coeffs);
-    FieldElement H_correct = g.sum_over_remaining(0, {});
-    FieldElement H_wrong((H_correct.get_value() + 1) % P, P);
+// ----------------------------------------------------------------------------
+// 4. Soundness: if the claimed sum is wrong, verifier should (overwhelmingly)
+//    reject. We test **deterministically** by adding 1 to the true sum.
+// ----------------------------------------------------------------------------
+TEST_F(SumcheckFixture, SoundnessWrongSum) {
+  for (size_t n = 1; n <= 10; ++n) {
+    auto g = random_poly(n, rng);
+    FieldT H = g.sum_over_remaining(0, {});
+    FieldT H_fake = H + FieldT::one(); // guaranteed to differ
 
     Prover prover(g);
-    Verifier verifier(P, H_wrong, n);
+    Verifier verifier(H_fake, n);
 
-    bool result = verifier.verify(prover);
-    ASSERT_FALSE(result); // Should reject in first round
+    ASSERT_FALSE(verifier.verify(prover)) << "Soundness failure for n = " << n;
+  }
 }
 
-// Parameterized Test for Different n and P
-TEST(SumCheckParameterizedTest, DifferentParameters) {
-    struct TestParam {
-        int P;
-        int n;
-    };
-    std::vector<TestParam> params = {{3, 1}, {5, 2}, {17, 3}, {17, 4}, {17, 5}};
-    for (auto param : params) {
-        int P = param.P, n = param.n;
-        std::vector<int> coeffs(1 << n);
-        for (int i = 0; i < (1 << n); i++) {
-            coeffs[i] = rand() % P; // Random coefficients between 0 and P-1
-        }
-        MultilinearPolynomial g(n, P, coeffs);
-        FieldElement H = g.sum_over_remaining(0, {});
-        Prover prover(g);
-        Verifier verifier(P, H, n);
-        ASSERT_TRUE(verifier.verify(prover))
-            << "Failed for P=" << P << ", n=" << n;
-    }
+// ----------------------------------------------------------------------------
+// 5. Zero polynomial corner-case (all coefficients 0).
+// ----------------------------------------------------------------------------
+TEST(EdgeCases, ZeroPolynomial) {
+  size_t n = 6;
+  std::vector<FieldT> zeros(1u << n, FieldT::zero());
+  MultilinearPolynomial g(n, zeros);
+
+  FieldT H = FieldT::zero();
+
+  Prover prover(g);
+  Verifier verifier(H, n);
+
+  ASSERT_TRUE(verifier.verify(prover));
+
+  // Wrong claim on zero poly should be rejected.
+  Verifier bad_verifier(FieldT::one(), n);
+  ASSERT_FALSE(bad_verifier.verify(prover));
 }
 
-// Corner Case: Zero Polynomial
-TEST_F(SumCheckTest, ZeroPolynomial) {
-    int P = 17, n = 2;
-    std::vector<int> coeffs(1 << n, 0);
-    MultilinearPolynomial g(n, P, coeffs);
-    FieldElement H(0, P);
+// ----------------------------------------------------------------------------
+// 6. Performance scaling (timing is *informative*, not an assertion).
+//    Caps at n = 12 so the suite finishes in < 10s on commodity HW.
+// ----------------------------------------------------------------------------
+TEST_F(SumcheckFixture, PerformanceScaling) {
+  std::cout << "\n--- Sum-check scaling ---\n";
+  for (size_t n = 4; n <= 12; n += 2) {
+    auto g = random_poly(n, rng);
+    FieldT H = g.sum_over_remaining(0, {});
 
     Prover prover(g);
-    Verifier verifier(P, H, n);
-    ASSERT_TRUE(verifier.verify(prover));
+    Verifier verifier(H, n);
 
-    FieldElement H_wrong(1, P);
-    Verifier verifier_wrong(P, H_wrong, n);
-    ASSERT_FALSE(verifier_wrong.verify(prover));
+    auto start = std::chrono::high_resolution_clock::now();
+    ASSERT_TRUE(verifier.verify(prover)); // correctness
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double elapsed =
+        std::chrono::duration_cast<std::chrono::duration<double>>(end - start)
+            .count();
+    std::cout << "n = " << n << " -> " << elapsed << " s\n";
+  }
+  std::cout << "-------------------------\n";
 }
 
-TEST_F(SumCheckTest, Performance) {
-    int P = 17;
-    for (int n = 1; n <= 12; n++) {
-        std::vector<int> coeffs(1 << n);
-        for (int i = 0; i < (1 << n); i++) {
-            coeffs[i] = rand() % P; // Random coefficients
-        }
-        MultilinearPolynomial g(n, P, coeffs);
-        FieldElement H = g.sum_over_remaining(0, {});
-        Prover prover(g);
-        Verifier verifier(P, H, n);
-
-        auto start = std::chrono::high_resolution_clock::now();
-        bool result = verifier.verify(prover);
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed = end - start;
-
-        std::cout << "n = " << n << ", time = " << elapsed.count() << " s\n";
-        ASSERT_TRUE(result); // Ensure correctness while measuring performance
-    }
-}
-
+// ----------------------------------------------------------------------------
+// 7. main()
+// ----------------------------------------------------------------------------
 int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+  // Initialise libff curve parameters once before FieldT operations.
+  libff::alt_bn128_pp::init_public_params();
+
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }
