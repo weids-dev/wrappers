@@ -1,3 +1,3 @@
-[submodule "external/libff"]
-	path = external/libff
-	url = https://github.com/scipr-lab/libff
+[submodule "external/libfqfft"]
+	path = external/libfqfft
+	url = https://github.com/scipr-lab/libfqfft

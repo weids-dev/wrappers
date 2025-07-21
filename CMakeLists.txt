@@ -3,12 +3,14 @@ project(Wrappers)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# --- libff ----------------------------------------------------------
+# Silence developer warnings that come from third-party code
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE BOOL "" FORCE)
+
+# --- libff & libfqfft -----------------------------------------------
 # We only want the library, no sub-modules or tests (legacy libff 2014 CMake)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)       # standard CMake knob
-set(BUILD_TESTS   OFF CACHE BOOL "" FORCE)       # libff's own switch
-# set(IS_LIBFF_PARENT ON CACHE BOOL "" FORCE)     # skip dependences
-add_subdirectory(external/libff) # looking for CMakeLists.txt in dependencies
+# set(BUILD_TESTING OFF CACHE BOOL "" FORCE)       # standard CMake knob
+# set(BUILD_TESTS   OFF CACHE BOOL "" FORCE)       # libff's own switch
+add_subdirectory(external/libfqfft)
 
 # Re-enable testsing for current project
 set(BUILD_TESTING ON CACHE BOOL "" FORCE)
@@ -19,13 +21,14 @@ find_package(GTest REQUIRED)
 add_executable(test_sumcheck_multilinear
     tests/test_sumcheck_multilinear.cpp)
 
+# Headers
 target_include_directories(test_sumcheck_multilinear PRIVATE
-    external/libff
+    external/libfqfft
     src)
 
 target_link_libraries(test_sumcheck_multilinear PRIVATE
     ff
-    gmpxx       
+    gmpxx gmp
     GTest::GTest
     GTest::Main)
 
