@@ -63,33 +63,6 @@ public:
 class DenseMultilinearPolynomial {
   size_t n;                   // #variables  (= log_2 |values|)
   std::vector<FieldT> values; // evaluations on the Boolean cube
-
-  // https://org.weids.dev/agenda/notes/vcmath.html
-  static void fold_once_inplace(std::vector<FieldT> &vec, const FieldT &r) {
-    // Fold to half
-    const FieldT one_minus_r = FieldT::one() - r;
-    const size_t half = vec.size() >> 1;
-
-    // For every consecutive pair (x1 = 0, x1 = 1) in the original multilinear
-    // polynomial we replace it by the affine interpolation (1-r)·v0 + r·v1.
-    // This works because, with all other coordinates fixed, g is linear in x1.
-    for (size_t pair = 0; pair < half; ++pair) {
-      // pair-by-pair (each value in gates will only being used once)
-      FieldT v0 = vec[2 * pair];
-      FieldT v1 = vec[2 * pair + 1];
-      // linear polynomial determined by two points (0, v0), (1, v1)
-      // g(r, ...) = (v1 - v0) r + v0
-      // Folding technique obtain g(r) by applying
-      // Affine interpolation:  g(r, ...) = (1-r)·v0 + r·v1
-      vec[pair] = v0 * one_minus_r + v1 * r; // overwrite
-    }
-
-    // After the loop the vector length is halved and now holds the table of the
-    // (k-1)-variate polynomial g(r, ·).
-
-    vec.resize(half); // drop the now-unused half, make it "in place"
-  }
-
 public:
   explicit DenseMultilinearPolynomial(const std::vector<FieldT> &layer_values)
       : values(layer_values) {
@@ -118,7 +91,7 @@ public:
       throw std::invalid_argument("bad point length");
     std::vector<FieldT> tmp = values;
     for (size_t i = 0; i < n; ++i)
-    // for each gate value vi, eliminate xi
+      // for each gate value vi, eliminate xi
       fold_once_inplace(tmp, point[i]);
     return tmp.front(); // single value left
   }
@@ -134,6 +107,39 @@ public:
       acc += v; // linear combinations of the remaining
     return acc;
   }
+
+  // https://org.weids.dev/agenda/notes/vcmath.html
+  static void fold_once_inplace(std::vector<FieldT> &vec, const FieldT &r) {
+    // Fold to half
+    const FieldT one_minus_r = FieldT::one() - r;
+    const size_t half = vec.size() >> 1;
+
+    // For every consecutive pair (x1 = 0, x1 = 1) in the original multilinear
+    // polynomial we replace it by the affine interpolation (1-r)*v0 + r*v1.
+    // This works because, with all other coordinates fixed, g is linear in x1.
+    for (size_t pair = 0; pair < half; ++pair) {
+      // pair-by-pair (each value in gates will only being used once)
+      FieldT v0 = vec[2 * pair];
+      FieldT v1 = vec[2 * pair + 1];
+      // linear polynomial determined by two points (0, v0), (1, v1)
+      // g(r, ...) = (v1 - v0) r + v0
+      // Folding technique obtain g(r) by applying
+      // Affine interpolation:  g(r, ...) = (1-r) * v0 + r * v1
+      vec[pair] = v0 * one_minus_r + v1 * r; // overwrite
+    }
+
+    // After the loop the vector length is halved and now holds the table of the
+    // (k-1)-variate polynomial g(r, .).
+
+    vec.resize(half); // drop the now-unused half, make it "in place"
+  }
+
+  /* ---------------------------------------------------------------- *
+   *  Read‑only access to the full table on {0,1}^n.                   *
+   *  Only the specialised prover needs this – no one else mutates it *
+   *  so returning a const ref is perfectly safe.                     *
+   * ---------------------------------------------------------------- */
+  const std::vector<FieldT> &cube() const { return values; }
 };
 
 } // namespace wrappers

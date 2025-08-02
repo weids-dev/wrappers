@@ -60,6 +60,62 @@ public:
   const Poly &poly() const { return g; }
 };
 
+/* ===================================================================== *
+ *  SPECIALISATION: fast, linear‑time prover for DenseMultilinearPolynomial
+ *  Implements the algorithm of Thaler, "Time‑Optimal Interactive Proofs
+ *  for Circuit Evaluation" (Thaler 13)).
+ *  ---------------------------------------------------------------
+ *  •   Total prover time  O(2^n) instead of  O(n*2^n)
+ *  •   Memory shrinks with every round: 2^n -> 2^{n-1} -> ... -> 1
+ * ===================================================================== */
+template <> class Prover<wrappers::DenseMultilinearPolynomial> {
+  using Poly = wrappers::DenseMultilinearPolynomial;
+  using FieldT = wrappers::FieldT;
+
+  const Poly &g; // immutable reference to full polynomial
+  const size_t n;
+  size_t processed;          // how many coordinates are already fixed
+  // DP-like optimization
+  std::vector<FieldT> table; // current :slice", size 2^{n‑processed}
+
+public:
+  explicit Prover(const Poly &g_)
+      : g(g_), n(g_.num_variables()), processed(0), table(g_.cube()) {}
+
+  /* ------------------------------------------------------------------ *
+   *  One Sum‑Check round – O(|table|) = O(2^{n‑processed}) time.       *
+   *  1.  Consume any new fixed coordinates the verifier has sent       *
+   *      since the last call (at most one, but the loop is robust).    *
+   *  2.  Scan current table pair‑wise to obtain C0, C1.               *
+   *      (C0 = \SUM_{x=0} g,  C1 = \SUM_{x=1} g − \SUM_{x=0} g)              *
+   * ------------------------------------------------------------------ */
+  LinearPolynomial compute_next_linear(const std::vector<FieldT> &fixed) {
+    /* Step 1: fold away *all* fixed coordinates we have not handled yet */
+    while (processed < fixed.size()) {
+      g.fold_once_inplace(table, fixed[processed]);
+      ++processed;
+    }
+    if (processed >= n)
+      throw std::invalid_argument("too many fixed values");
+
+    /* Step 2: build the degree‑1 polynomial for x_{processed+1}        */
+    FieldT c0 = FieldT::zero(); // \SUM_{x=0} g
+    FieldT c1 = FieldT::zero(); // \SUM_{x=1} g − \SUM_{x=0} g
+
+    const size_t half = table.size() >> 1;
+    for (size_t i = 0; i < half; ++i) {
+      const FieldT v0 = table[2 * i];     // partial value @ x = 0
+      const FieldT v1 = table[2 * i + 1]; // partial value @ x = 1
+      c0 += v0;
+      c1 += v1 - v0;
+    }
+    return {c0, c1};
+  }
+
+  /* Needed at the final verifier step */
+  const Poly &poly() const { return g; }
+};
+
 /* -------------------------------------------------------------------- *
  *  Verifier                                                             *
  * -------------------------------------------------------------------- */

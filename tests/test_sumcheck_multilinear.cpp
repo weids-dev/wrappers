@@ -118,7 +118,7 @@ TYPED_TEST(SumcheckFixture, ZeroPolynomial) {
  * ------------------------------------------------------------------ */
 TYPED_TEST(SumcheckFixture, PerformanceScaling) {
   constexpr bool is_naive = std::is_same<TypeParam, NaivePoly>::value;
-  size_t max_n = is_naive ? 12 : 22;
+  size_t max_n = is_naive ? 12 : 26;
 
   std::cout << "\n--- " << (is_naive ? "Naive" : "FFT") << " scaling ---\n";
   for (size_t n = 4; n <= max_n; n += 2) {
