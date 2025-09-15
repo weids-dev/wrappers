@@ -12,7 +12,7 @@ using FieldT = wrappers::FieldT;
 
 /* ---------------- choose the two implementations ------------------ */
 using NaivePoly = wrappers::NaiveMultilinearPolynomial;
-using FFTPoly = wrappers::DenseMultilinearPolynomial;
+using DensePoly = wrappers::DenseMultilinearPolynomial;
 
 /* ------------ helpers (templated so they work for both) ----------- */
 template <class Poly> static FieldT brute_sum_bool_cube(const Poly &g) {
@@ -43,7 +43,7 @@ protected:
   void SetUp() override { rng.seed(std::random_device{}()); }
 };
 
-using Implementations = ::testing::Types<NaivePoly, FFTPoly>;
+using Implementations = ::testing::Types<NaivePoly, DensePoly>;
 
 TYPED_TEST_SUITE(SumcheckFixture, Implementations);
 
@@ -114,13 +114,13 @@ TYPED_TEST(SumcheckFixture, ZeroPolynomial) {
 }
 
 /* ------------------------------------------------------------------ *
- * 6.  Performance (Naive up to 12; FFT can go higher)                *
+ * 6.  Performance (Naive up to 12; Dense can go higher)                *
  * ------------------------------------------------------------------ */
 TYPED_TEST(SumcheckFixture, PerformanceScaling) {
   constexpr bool is_naive = std::is_same<TypeParam, NaivePoly>::value;
   size_t max_n = is_naive ? 12 : 26;
 
-  std::cout << "\n--- " << (is_naive ? "Naive" : "FFT") << " scaling ---\n";
+  std::cout << "\n--- " << (is_naive ? "Naive" : "Dense") << " scaling ---\n";
   for (size_t n = 4; n <= max_n; n += 2) {
     auto g = random_poly<TypeParam>(n, this->rng);
     FieldT H = g.sum_over_remaining(0, {});

@@ -1,5 +1,5 @@
 // multilinear.hpp
-#pragma once
+pragma once
 
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
 // #include <libfqfft/evaluation_domain/get_evaluation_domain.hpp>
@@ -140,6 +140,53 @@ public:
    *  so returning a const ref is perfectly safe.                     *
    * ---------------------------------------------------------------- */
   const std::vector<FieldT> &cube() const { return values; }
+};
+
+/* -------------------------------------------------------------------- *
+ * Quadratic Univariate Polynomial (since individual degree <=2 in GKR) *
+ * -------------------------------------------------------------------- */
+struct QuadraticPolynomial {
+  FieldT c0, c1, c2;
+  QuadraticPolynomial(FieldT a0 = FieldT::zero(), FieldT a1 = FieldT::zero(),
+                      FieldT a2 = FieldT::zero())
+      : c0(a0), c1(a1), c2(a2) {}
+  FieldT evaluate(const FieldT &r) const { return c0 + c1 * r + c2 * (r * r); }
+  FieldT sum_over_binary() const {
+    return evaluate(FieldT::zero()) + evaluate(FieldT::one());
+  }
+};
+
+/* -------------------------------------------------------------------- *
+ * GKR Layer Polynomial (structured f(b,c) for sum-check) *
+ * -------------------------------------------------------------------- */
+class GKRLayerPoly {
+public:
+  DenseMultilinearPolynomial add; // MLE of add gates, fixed on a=r_i
+  DenseMultilinearPolynomial mul; // MLE of mul gates, fixed on a=r_i
+  DenseMultilinearPolynomial w;   // MLE of next layer values W_{i+1}
+  GKRLayerPoly(const std::vector<FieldT> &add_vals,
+               const std::vector<FieldT> &mul_vals,
+               const std::vector<FieldT> &w_vals)
+      : add(add_vals), mul(mul_vals), w(w_vals) {
+    if (add.num_variables() != mul.num_variables() ||
+        add.num_variables() != 2 * w.num_variables()) {
+      throw std::invalid_argument("Invalid GKR layer polynomial dimensions");
+    }
+  }
+  size_t num_variables() const { return add.num_variables(); }
+  FieldT evaluate(const std::vector<FieldT> &point) const {
+    size_t s = w.num_variables();
+    if (point.size() != 2 * s) {
+      throw std::invalid_argument("Bad point length for GKR layer evaluation");
+    }
+    std::vector<FieldT> b(point.begin(), point.begin() + s);
+    std::vector<FieldT> c(point.begin() + s, point.end());
+    FieldT wb = w.evaluate(b);
+    FieldT wc = w.evaluate(c);
+    FieldT a = add.evaluate(point);
+    FieldT m = mul.evaluate(point);
+    return a * (wb + wc) + m * (wb * wc);
+  }
 };
 
 } // namespace wrappers

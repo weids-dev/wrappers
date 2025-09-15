@@ -1,11 +1,13 @@
 #ifndef CIRCUIT_HPP
 #define CIRCUIT_HPP
 
-#include "sumcheck_multilinear.hpp"
 #include <cstdint>
+#include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
 #include <vector>
 
 enum GateType { ADD, MUL };
+
+using FieldT = libff::Fr<libff::alt_bn128_pp>;
 
 struct Gate {
   GateType type;  // ADD or MUL
@@ -26,9 +28,8 @@ struct Layer {
 class Circuit {
 public:
   std::vector<Layer> layers; // layers[i] computes layer i+1 from layer i
-  int P;                     // Field modulus, matching sum-check
 
-  Circuit(int prime) : P(prime) {
+  Circuit() {
     // Input layer (layer 0) has no gates; add placeholder
     layers.emplace_back(Layer(0));
   }
@@ -55,8 +56,7 @@ public:
   }
 
   // Evaluate the circuit (for testing)
-
-  std::vector<FieldT>
+  std::vector<std::vector<FieldT>>
   evaluate(const std::vector<FieldT> &input) const {
     if (input.size() != (1u << layers[0].nb_vars)) {
       throw std::invalid_argument("Input size mismatch");
@@ -83,7 +83,7 @@ public:
         }
       }
     }
-    return layer_vals.back();
+    return layer_vals;
   }
 };
 
