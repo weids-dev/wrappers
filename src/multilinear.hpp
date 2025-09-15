@@ -1,5 +1,5 @@
 // multilinear.hpp
-pragma once
+#pragma once
 
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
 // #include <libfqfft/evaluation_domain/get_evaluation_domain.hpp>
