@@ -3,7 +3,24 @@
 
 #include <cstdint>
 #include <libff/algebra/curves/alt_bn128/alt_bn128_pp.hpp>
+#include <unordered_set>
 #include <vector>
+
+namespace std {
+template <> struct hash<libff::Fp_model<4L, libff::alt_bn128_modulus_r>> {
+  size_t operator()(const libff::Fp_model<4L, libff::alt_bn128_modulus_r> &elem)
+      const noexcept {
+    const auto &repr = elem.mont_repr; // Direct access to limbs
+    size_t hash_value = 0;
+    for (size_t i = 0; i < 4; ++i) {
+      hash_value ^= std::hash<mp_limb_t>{}(repr.data[i]) +
+                    0x9e3779b97f4a7c15ULL + (hash_value << 6) +
+                    (hash_value >> 2);
+    }
+    return hash_value;
+  }
+};
+} // namespace std
 
 enum GateType { ADD, MUL };
 

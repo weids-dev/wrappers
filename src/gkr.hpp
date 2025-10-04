@@ -22,17 +22,24 @@ public:
 
   std::vector<FieldT> get_output() const { return layer_vals.back(); }
 
-  std::vector<FieldT> compute_q_ys(const std::vector<FieldT> &bc,
-                                   size_t layer_idx) const {
+  std::vector<FieldT> compute_q_ys(const std::vector<FieldT> &fixed_bc,
+                                   size_t layer_idx,
+                                   const std::vector<FieldT> &random_xs) const {
     size_t s = circuit.layers[layer_idx].nb_vars;
-    std::vector<FieldT> b(bc.begin(), bc.begin() + s);
-    std::vector<FieldT> c(bc.begin() + s, bc.end());
+    if (random_xs.size() != s + 1) {
+      std::cerr << "compute_q_ys: Invalid size of random_xs that verifier picks"
+                << std::endl;
+      throw std::invalid_argument("Invalid size of random_xs");
+    }
+    std::vector<FieldT> b(fixed_bc.begin(), fixed_bc.begin() + s);
+    std::vector<FieldT> c(fixed_bc.begin() + s, fixed_bc.end());
+    // w is the dense table of previous layer (input)
     DenseMultilinearPolynomial w(layer_vals[layer_idx]);
-    std::vector<FieldT> xs(s + 1), ys(s + 1);
+    std::vector<FieldT> ys(s + 1);
 
+    // sample q(t) = w((1-t)b + tc) at s+1 nodes
     for (size_t tt = 0; tt <= s; ++tt) {
-      xs[tt] = FieldT(static_cast<long long>(tt));
-      FieldT t = xs[tt];
+      FieldT t = random_xs[tt];
       std::vector<FieldT> pt(s);
       for (size_t j = 0; j < s; ++j) {
         pt[j] = b[j] * (FieldT::one() - t) + c[j] * t;
@@ -141,13 +148,23 @@ public:
         fixed.push_back(r);
         current_claim = p.evaluate(r);
       }
-      // Prover "sends" ys for q
-      std::vector<FieldT> ys = prover.compute_q_ys(fixed, i - 1);
-      // Compute q(0), q(1) using Lagrange
-      std::vector<FieldT> xs(s_bc + 1);
-      for (size_t tt = 0; tt <= s_bc; ++tt) {
-        xs[tt] = FieldT(static_cast<long long>(tt));
+
+      std::vector<FieldT> xs;
+      xs.reserve(s_bc + 1);
+      std::unordered_set<FieldT> seen;
+      // Verifier pick s+1 points randomly, but should be distinct
+      while (xs.size() < s_bc + 1) {
+        FieldT rand_val = FieldT::random_element();
+        if (seen.find(rand_val) == seen.end()) {
+          seen.insert(rand_val);
+          xs.push_back(rand_val);
+        }
       }
+
+      // Prover "sends" ys for q, which implicitly defines the s-degree Lagrange
+      // basis polynomial
+      std::vector<FieldT> ys = prover.compute_q_ys(fixed, i - 1, xs);
+      // Compute q(0), q(1) using Lagrange
       FieldT q0 = lagrange_eval(ys, xs, FieldT::zero());
       FieldT q1 = lagrange_eval(ys, xs, FieldT::one());
       FieldT add_eval = compute_reduced_gate_eval(true, i, current_r, fixed);

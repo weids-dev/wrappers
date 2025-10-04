@@ -78,7 +78,7 @@ template <> class Prover<wrappers::DenseMultilinearPolynomial> {
   const size_t n;
   size_t processed; // how many coordinates are already fixed
   // DP-like optimization
-  std::vector<FieldT> table; // current :slice", size 2^{n‑processed}
+  std::vector<FieldT> table; // current :slice, size 2^{n‑processed}
 
 public:
   explicit Prover(const Poly &g_)
@@ -255,7 +255,7 @@ public:
       c1 += two_terms_add;
       c2 += -two_terms_add;
       c2 += s_add1_w1;
-      // mul * wb * wc
+      // mul * wb * wc (any potencial at this point "add")
       FieldT s_mul0_w0 = FieldT::zero();
       FieldT s_mul0_w1 = FieldT::zero();
       FieldT s_mul1_w0 = FieldT::zero();
