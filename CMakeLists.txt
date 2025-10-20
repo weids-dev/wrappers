@@ -7,6 +7,38 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Silence developer warnings that come from third-party code
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE BOOL "" FORCE)
 
+# --- procps / proc2 compatibility -----------------------------------
+# Some vendored deps still do: pkg_check_modules(PROCPS REQUIRED libprocps)
+# On newer distros the package is libproc2. We create a tiny pkg-config shim
+# named "libprocps.pc" that forwards to libproc2, so no edits under external/.
+find_package(PkgConfig REQUIRED)
+
+# Prefer libproc2 if present; otherwise fall back to legacy libprocps.
+pkg_check_modules(PROC2 QUIET libproc2)
+if (PROC2_FOUND)
+  # Create a local pkg-config directory with a shim for "libprocps"
+  set(_shim_dir "${CMAKE_BINARY_DIR}/pkgconfig")
+  file(MAKE_DIRECTORY "${_shim_dir}")
+  # Write a minimal .pc that forwards Cflags/Libs to libproc2
+  file(WRITE "${_shim_dir}/libprocps.pc"
+"Name: libprocps (shim)
+Description: Compatibility shim mapping libprocps -> libproc2
+Version: 1.0
+Libs: ${PROC2_LDFLAGS}
+Cflags: ${PROC2_CFLAGS}
+")
+  # Ensure vendored projects see our shim first
+  if(DEFINED ENV{PKG_CONFIG_PATH} AND NOT \"$ENV{PKG_CONFIG_PATH}\" STREQUAL \"\")
+    set(ENV{PKG_CONFIG_PATH} \"${_shim_dir}:$ENV{PKG_CONFIG_PATH}\")
+  else()
+    set(ENV{PKG_CONFIG_PATH} \"${_shim_dir}\")
+  endif()
+else()
+  # Old distros: make sure libprocps exists so vendored checks pass
+  pkg_check_modules(PROCPS REQUIRED libprocps)
+endif()
+# --------------------------------------------------------------------
+
 # --- libff & libfqfft -----------------------------------------------
 # We only want the library, no sub-modules or tests (legacy libff 2014 CMake)
 # set(BUILD_TESTING OFFCACHE BOOL "" FORCE)       # standard CMake knob
