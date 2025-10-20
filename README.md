@@ -2,7 +2,7 @@
 
 **[GKR Explained: From Cubes to Curves](https://org.weids.dev/agenda/notes/gkr-sum-check-tutorial.html)**
 
-- **What's inside:** Sum-check (multilinear), FFT-based dense-MLE eval, folding table, layer-by-layer GKR reduction, unit tests.
+- **What's inside:** Sum-check (multilinear), FFT-based dense-MLE eval, folding table, layer-by-layer GKR reduction.
 - **Security:** research/education code; not audited; do not use in production.
 
 ## How to Build (Ubuntu/Debian)
@@ -18,7 +18,7 @@ cd wrappers
 git submodule update --init --recursive
 sudo apt update
 export CXXFLAGS="-DNO_PROCPS"
-sudo apt install -y build-essential cmake pkg-config libgtest-dev libgmp-dev libssl-dev libgtest-dev
+sudo apt install -y build-essential cmake pkg-config libgtest-dev libgmp-dev libssl-dev
 
 # Try libproc2 first (newer distros), fall back to libprocps (22.04)
 sudo apt install -y libproc2-dev || sudo apt install -y libprocps-dev
