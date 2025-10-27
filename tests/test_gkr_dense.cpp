@@ -54,7 +54,7 @@ class BadProver : public GKRProver {
 public:
   BadProver(const Circuit &c, const std::vector<FieldT> &input,
             size_t perturb_layer)
-      : GKRProver(c, input) {
+      : GKRProver(c, input, true) {
     if (perturb_layer > 0 && perturb_layer < layer_vals.size()) {
       // Perturb the first value in the specified layer
       layer_vals[perturb_layer][0] += FieldT::one();
@@ -83,7 +83,7 @@ TEST_F(GKRFixture, BasicTest) {
   input[0] = FieldT(3);
   input[1] = FieldT(4);
 
-  GKRProver prover(c, input);
+  GKRProver prover(c, input, true);
   GKRVerifier verifier(c, input);
 
   auto start = std::chrono::high_resolution_clock::now();
@@ -130,7 +130,7 @@ TEST_F(GKRFixture, CorrectnessTest) {
       input[i] = FieldT(input_int[i]);
     }
 
-    GKRProver prover(c, input);
+    GKRProver prover(c, input, true);
     GKRVerifier verifier(c, input);
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -224,7 +224,7 @@ TEST_F(GKRFixture, LargeWorkloadTest) {
     for (size_t i = 0; i < input.size(); ++i) {
       input[i] = FieldT(input_int[i]);
     }
-    GKRProver prover(c, input);
+    GKRProver prover(c, input, true);
     GKRVerifier verifier(c, input);
     auto start = std::chrono::high_resolution_clock::now();
     bool result = verifier.verify(prover);
