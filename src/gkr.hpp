@@ -7,7 +7,8 @@
 using DenseMultilinearPolynomial = wrappers::DenseMultilinearPolynomial;
 using QuadraticPolynomial = wrappers::QuadraticPolynomial;
 using GKRLayerPoly = wrappers::GKRLayerPoly;
-using Prover = sumcheck::GKRLayerProver;
+using Prover = sumcheck::GKRLayerProver; // dense
+using SparseProver = sumcheck::SparseGKRLayerProver;
 
 /* -------------------------------------------------------------------- *
  * GKR Prover *
@@ -17,8 +18,9 @@ public:
   const Circuit &circuit;
   std::vector<std::vector<FieldT>> layer_vals;
 
-  explicit GKRProver(const Circuit &c, const std::vector<FieldT> &input)
-      : circuit(c), layer_vals(c.evaluate(input)) {}
+  explicit GKRProver(const Circuit &c, const std::vector<FieldT> &input,
+                     bool use_sparse = false)
+      : circuit(c), layer_vals(c.evaluate(input)), use_sparse_(use_sparse) {}
 
   std::vector<FieldT> get_output() const { return layer_vals.back(); }
 
@@ -51,18 +53,29 @@ public:
 
   /* Builds reduced MLEs for add(r_a, b, c) and mul(r_a, b, c) */
   void start_layer(size_t layer_idx, const std::vector<FieldT> &a_r) {
+    // cleanup
     delete current_poly;
     delete current_prover;
+    delete current_sparse_prover;
     current_poly = nullptr;
     current_prover = nullptr;
+    current_sparse_prover = nullptr;
 
     // output of this layer (a) (# bits)
     size_t s_a = circuit.layers[layer_idx].nb_vars;
     // input to this layer (b, c) (# bits)
     size_t s_bc = circuit.layers[layer_idx - 1].nb_vars;
-    // reduced (from size 2^{s_a + 2*s_bc} to 2^{2*s_bc} with output being
-    // fixed) Size 2^{2*s_bc}: each entry corresponds to a boolean point
-    // (b_0...b_{s-1}, c_0...c_{s-1})
+
+    if (use_sparse_) {
+      current_sparse_prover = new SparseProver(
+          circuit.layers[layer_idx].gates, // sparse gates
+          s_a, s_bc, a_r,
+          layer_vals[layer_idx - 1] // W_{i-1} dense cube (size 2^s)
+      );
+      return;
+    }
+
+    // dense circuit O(2^{2s}) memory
     std::vector<FieldT> reduced_add_vals(1ull << (2 * s_bc), FieldT::zero());
     std::vector<FieldT> reduced_mul_vals(1ull << (2 * s_bc), FieldT::zero());
 
@@ -91,6 +104,12 @@ public:
   }
 
   QuadraticPolynomial get_next_quadratic(const std::vector<FieldT> &fixed) {
+    if (use_sparse_) {
+      if (!current_sparse_prover) {
+        throw std::invalid_argument("Layer not started (sparse)");
+      }
+      return current_sparse_prover->compute_next_quadratic(fixed);
+    }
     if (!current_prover) {
       throw std::invalid_argument("Layer not started");
     }
@@ -100,11 +119,14 @@ public:
   ~GKRProver() {
     delete current_poly;
     delete current_prover;
+    delete current_sparse_prover;
   }
 
 private:
+  bool use_sparse_ = false;
   GKRLayerPoly *current_poly = nullptr;
   Prover *current_prover = nullptr;
+  SparseProver *current_sparse_prover = nullptr;
 };
 
 /* -------------------------------------------------------------------- *
@@ -167,6 +189,7 @@ public:
       // Compute q(0), q(1) using Lagrange
       FieldT q0 = lagrange_eval(ys, xs, FieldT::zero());
       FieldT q1 = lagrange_eval(ys, xs, FieldT::one());
+      // TODO: re-evaluating the circuit, costly
       FieldT add_eval = compute_reduced_gate_eval(true, i, current_r, fixed);
       FieldT mul_eval = compute_reduced_gate_eval(false, i, current_r, fixed);
       FieldT eval = add_eval * (q0 + q1) + mul_eval * (q0 * q1);

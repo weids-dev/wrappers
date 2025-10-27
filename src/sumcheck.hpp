@@ -3,6 +3,7 @@
 
 // #define SUMCHECK_POLY_FFT // comment-out to use the naive class
 
+#include "circuit.hpp"
 #include "multilinear.hpp" // brings FieldT + both back-ends
 #include <iostream>
 #include <stdexcept>
@@ -381,6 +382,206 @@ public:
   }
   const std::vector<FieldT> &get_fixed() const { return fixed; }
   const FieldT &get_final_claim() const { return claim; }
+};
+
+// Sparse GKR P: never materializes add/mul wiring tables of size 2^{2s}.
+class SparseGKRLayerProver {
+public:
+  using FieldT = libff::Fr<libff::alt_bn128_pp>;
+
+  // Build a sparse view for one circuit layer:
+  // - gates:         circuit.layers[layer_idx].gates
+  // - s_a:           #bits for output addresses at this layer
+  // - s_bc:          #bits for each of the two inputs from previous layer
+  // - a_r:           verifier's randomness for output addr (pins A,M to (b,c))
+  // - w_values:      dense table of previous layer's wire-values (size 2^s_bc)
+  SparseGKRLayerProver(const std::vector<Gate> &gates, size_t s_a, size_t s_bc,
+                       const std::vector<FieldT> &a_r,
+                       const std::vector<FieldT> &w_values)
+      : s_(s_bc), last_k_(0), w_full_(w_values), T_w_b_(w_values),
+        T_w_c_(w_values) {
+    if (w_values.size() != (1ull << s_)) {
+      throw std::invalid_argument(
+          "SparseGKRLayerProver: w_values size must be 2^s_bc");
+    }
+    entries_.reserve(gates.size());
+    // Precompute alpha_g = chi_out(r_a) for each gate (Kronecker at a=r_a).
+    for (const auto &g : gates) {
+      FieldT alpha = FieldT::one();
+      size_t o = g.o_id;
+      for (size_t j = 0; j < s_a; ++j) {
+        bool bit = (o >> j) & 1;
+        alpha *= bit ? a_r[j] : (FieldT::one() - a_r[j]);
+      }
+      entries_.push_back(Entry{g.type, g.i_id0, g.i_id1, alpha, alpha});
+    }
+  }
+
+  wrappers::QuadraticPolynomial
+  compute_next_quadratic(const std::vector<FieldT> &fixed) {
+    if (fixed.size() > 2 * s_) {
+      throw std::invalid_argument(
+          "SparseGKRLayerProver: too many fixed coordinates");
+    }
+
+    // Handy constants (avoid int*FieldT)
+    const FieldT ONE = FieldT::one();
+    const FieldT TWO = ONE + ONE;
+
+    // If caller restarted (new layer), reset internal state.
+    if (fixed.size() < last_k_) {
+      reset_state();
+    }
+
+    // Fold w-tables & update per-gate prefix weights for newly fixed coords
+    while (last_k_ < fixed.size()) {
+      const FieldT &r = fixed[last_k_];
+      if (last_k_ < s_) {
+        const size_t j = last_k_;
+        for (auto &e : entries_) {
+          bool bit = (e.left >> j) & 1;
+          e.prefix *= bit ? r : (ONE - r);
+        }
+        wrappers::DenseMultilinearPolynomial::fold_once_inplace(T_w_b_, r);
+      } else {
+        const size_t j2 = last_k_ - s_;
+        for (auto &e : entries_) {
+          bool bit = (e.right >> j2) & 1;
+          e.prefix *= bit ? r : (ONE - r);
+        }
+        wrappers::DenseMultilinearPolynomial::fold_once_inplace(T_w_c_, r);
+      }
+      ++last_k_;
+    }
+
+    if (fixed.size() == 2 * s_) {
+      throw std::logic_error(
+          "SparseGKRLayerProver: all coordinates are already fixed");
+    }
+
+    wrappers::QuadraticPolynomial P; // c0,c1,c2 = 0
+    const size_t k = fixed.size();
+
+    if (k < s_) {
+      // -------- current variable is b_j --------
+      const size_t j = k;
+      const std::vector<FieldT> &Wc = T_w_c_; // constant across b-rounds
+
+      for (const auto &e : entries_) {
+        const bool bbit = (e.left >> j) & 1;
+        const FieldT a0 =
+            (!bbit && e.gate_type == GateType::ADD) ? e.prefix : FieldT::zero();
+        const FieldT a1 =
+            (bbit && e.gate_type == GateType::ADD) ? e.prefix : FieldT::zero();
+        const FieldT m0 =
+            (!bbit && e.gate_type == GateType::MUL) ? e.prefix : FieldT::zero();
+        const FieldT m1 =
+            (bbit && e.gate_type == GateType::MUL) ? e.prefix : FieldT::zero();
+
+        const size_t suffix_left = (e.left >> (j + 1));
+        const size_t base = (suffix_left << 1);
+        const FieldT wb0 = T_w_b_[base];
+        const FieldT wb1 = T_w_b_[base + 1];
+
+        const FieldT wc = Wc[e.right];
+
+        // A · w(b)
+        P.c0 += a0 * wb0;
+        P.c1 += (a1 * wb0) + (a0 * wb1) - (TWO * (a0 * wb0));
+        P.c2 += (a0 * wb0) - (a1 * wb0) - (a0 * wb1) + (a1 * wb1);
+
+        // A · w(c)  (w(c) constant here)
+        P.c0 += a0 * wc;
+        P.c1 += (a1 * wc) - (a0 * wc);
+        // P.c2 += 0;
+
+        // M · w(b) · w(c)
+        const FieldT m0wb0 = m0 * wb0 * wc;
+        const FieldT m0wb1 = m0 * wb1 * wc;
+        const FieldT m1wb0 = m1 * wb0 * wc;
+        P.c0 += m0wb0;
+        P.c1 += m1wb0 + m0wb1 - (TWO * m0wb0);
+        P.c2 += (m0wb0)-m1wb0 - m0wb1 + (m1 * wb1 * wc);
+      }
+    } else {
+      // -------- current variable is c_j2 --------
+      const size_t j2 = k - s_;
+
+      if (T_w_b_.size() != 1) {
+        throw std::logic_error(
+            "SparseGKRLayerProver: T_w_b_ should be folded to size 1");
+      }
+      const FieldT wb = T_w_b_.front();
+
+      for (const auto &e : entries_) {
+        const bool cbit = (e.right >> j2) & 1;
+        const FieldT a0 =
+            (!cbit && e.gate_type == GateType::ADD) ? e.prefix : FieldT::zero();
+        const FieldT a1 =
+            (cbit && e.gate_type == GateType::ADD) ? e.prefix : FieldT::zero();
+        const FieldT m0 =
+            (!cbit && e.gate_type == GateType::MUL) ? e.prefix : FieldT::zero();
+        const FieldT m1 =
+            (cbit && e.gate_type == GateType::MUL) ? e.prefix : FieldT::zero();
+
+        const size_t suffix_right = (e.right >> (j2 + 1));
+        const size_t base = (suffix_right << 1);
+        const FieldT wc0 = T_w_c_[base];
+        const FieldT wc1 = T_w_c_[base + 1];
+
+        // A · w(b)   (w(b) constant here)
+        P.c0 += a0 * wb;
+        P.c1 += (a1 * wb) - (a0 * wb);
+        // P.c2 += 0;
+
+        // A · w(c)
+        P.c0 += a0 * wc0;
+        P.c1 += (a1 * wc0) + (a0 * wc1) - (TWO * (a0 * wc0));
+        P.c2 += (a0 * wc0) - (a1 * wc0) - (a0 * wc1) + (a1 * wc1);
+
+        // M · w(b) · w(c)
+        const FieldT m0wb = m0 * wb;
+        const FieldT m1wb = m1 * wb;
+        const FieldT m0wbwc0 = m0wb * wc0;
+        const FieldT m0wbwc1 = m0wb * wc1;
+        const FieldT m1wbwc0 = m1wb * wc0;
+        P.c0 += m0wbwc0;
+        P.c1 += m1wbwc0 + m0wbwc1 - (TWO * m0wbwc0);
+        P.c2 += (m0wbwc0)-m1wbwc0 - m0wbwc1 + (m1wb * wc1);
+      }
+    }
+
+    return P;
+  }
+
+private:
+  struct Entry {
+    GateType gate_type;
+    uint32_t left;  // i_id0
+    uint32_t right; // i_id1
+    FieldT alpha;   // chi_out(r_a)
+    FieldT
+        prefix; // alpha * product of indicator evals for *already fixed* coords
+  };
+
+  const size_t s_;             // #bits per side (b and c)
+  size_t last_k_;              // #coords already folded into prefix/T_w_*
+  std::vector<Entry> entries_; // sparse wiring list with running weights
+
+  // We keep two folded copies of the previous layer’s table:
+  const std::vector<FieldT>
+      w_full_; // immutable full cube (not used except for sanity)
+  std::vector<FieldT> T_w_b_; // folded along b-variables as they are fixed
+  std::vector<FieldT> T_w_c_; // folded along c-variables as they are fixed
+
+  void reset_state() {
+    last_k_ = 0;
+    T_w_b_ = w_full_;
+    T_w_c_ = w_full_;
+    for (auto &e : entries_) {
+      e.prefix = e.alpha; // reset to just chi_out(r_a)
+    }
+  }
 };
 
 using DefaultProver = Prover<PolyDefault>;
